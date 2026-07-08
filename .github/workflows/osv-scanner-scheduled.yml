@@ -20,10 +20,10 @@ on:
     - cron: 0 4 * * 1
 
 permissions:
-  # Require writing security events to upload SARIF file to security tab
-  security-events: write
-  # Only need to read contents
+  actions: read      # was 'none' or missing
   contents: read
+  security-events: write   # OSV-Scanner needs this to upload results
+
 
 jobs:
   scan-scheduled:
