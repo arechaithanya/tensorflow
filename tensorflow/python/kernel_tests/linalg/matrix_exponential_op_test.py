@@ -33,14 +33,42 @@ from tensorflow.python.platform import test
 
 def np_expm(x):  # pylint: disable=invalid-name
   """Slow but accurate Taylor series matrix exponential."""
-  y = np.zeros(x.shape, dtype=x.dtype)
-  xn = np.eye(x.shape[0], dtype=x.dtype)
-  for n in range(40):
-    if n > 0:
-      xn /= float(n)
-    y += xn
-    xn = np.dot(xn, x)
-  return y
+  if x.size == 0:
+    return np.empty(x.shape, dtype=x.dtype)
+
+  compute_dtype = np.float64 if np.isrealobj(x) else np.complex128
+  A = x.astype(compute_dtype, copy=True)
+
+  # Try SciPy first (most robust and well-tested).
+  try:
+    from scipy import linalg as scipy_linalg  # pylint: disable=g-import-not-at-top
+    return scipy_linalg.expm(A).astype(x.dtype)
+  except (ImportError, AttributeError, TypeError, ValueError):
+    pass
+
+  # Fallback: scaling-and-squaring + Taylor series.
+  # This is far more numerically stable than unscaled Taylor series,
+  # and handles matrices with arbitrary norms reasonably well.
+  n = A.shape[0]
+  I = np.eye(n, dtype=A.dtype)
+
+  # Compute infinity norm to determine scaling factor.
+  norm_a = np.linalg.norm(A, ord=np.inf)
+  if norm_a == 0:
+    return I.astype(x.dtype)
+
+  s = max(0, int(np.ceil(np.log2(norm_a / 5.4))))
+  A_scaled = A / (2.0**s)
+  Y = I.copy()
+  term = I.copy()
+  for k in range(1, 40):
+    term = term.dot(A_scaled) / k
+    Y += term
+    if np.linalg.norm(term, ord=np.inf) < 1e-16:
+      break
+  for _ in range(s):
+    Y = Y.dot(Y)
+  return Y.astype(x.dtype)
 
 
 @test_util.run_all_without_tensor_float_32("Avoid TF32-based matmuls.")
@@ -55,7 +83,7 @@ class ExponentialOpTest(test.TestCase):
       else:
         if x.ndim > 2:
           np_ans = np.zeros(inp.shape, dtype=np_type)
-          for i in itertools.product(*[range(x) for x in inp.shape[:-2]]):
+          for i in itertools.product(*[range(d) for d in inp.shape[:-2]]):
             np_ans[i] = np_expm(inp[i])
         else:
           np_ans = np_expm(inp)
